@@ -1,0 +1,41 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+db.sqlite3
+node_modules/
+dist/
+.DS_Store
+.pytest_cache/
+.hotswan/
+
+# Environment variables and credentials
+.env
+.env.*
+!**/.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Django local database
+*.sqlite3
+*.sqlite3-journal
+
+# React
+node_modules/
+dist/
+build/
+
+# Local project files
+backups/
+*.zip
+*.log
+*.csv
+
+# IDE and operating system
+.idea/
+.DS_Store
