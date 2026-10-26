@@ -39,3 +39,20 @@ backups/
 # IDE and operating system
 .idea/
 .DS_Store
+
+# Local configuration and sensitive data
+.env
+.env.*
+!**/.env.example
+*.sqlite3
+*.sqlite3-*
+.venv/
+node_modules/
+dist/
+logs/
+backups/
+__pycache__/
+*.py[cod]
+.idea/
+.DS_Store
+*.csv

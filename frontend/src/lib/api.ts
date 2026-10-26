@@ -1,5 +1,25 @@
+export type SyncStatus = {
+  enabled: boolean;
+  interval_minutes: number;
+  next_run_at: string | null;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_error: string;
+  last_tick_at: string | null;
+  cron_active: boolean;
+  running: boolean;
+  snapshot_available: boolean;
+  record_count: number | null;
+  snapshot_at: string | null;
+  history: {
+    id: number; trigger: string; outcome: string;
+    started_at: string; finished_at: string;
+    record_count: number | null; error: string;
+  }[];
+};
+
 export type Role = 'admin' | 'analyst' | 'viewer';
-export type Capability = 'overview.view' | 'geography.view' | 'records.view' | 'export.summary' | 'export.records' | 'metrics.refresh' | 'staff.manage' | 'audit.view';
+export type Capability = 'overview.view' | 'geography.view' | 'records.view' | 'export.summary' | 'export.records' | 'metrics.refresh' | 'sync.manage' | 'staff.manage' | 'audit.view';
 export type Account = {
   id: number;
   username: string;
@@ -116,7 +136,7 @@ export class AccountContractError extends Error {
 const allowedRoles: ReadonlySet<string> = new Set(['admin', 'analyst', 'viewer']);
 const allowedCapabilities: ReadonlySet<string> = new Set([
   'overview.view', 'geography.view', 'records.view', 'export.summary', 'export.records',
-  'metrics.refresh', 'staff.manage', 'audit.view',
+  'metrics.refresh', 'sync.manage', 'staff.manage', 'audit.view',
 ]);
 
 /** Validate RBAC responses rather than trusting an older cached /auth/me payload. */

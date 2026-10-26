@@ -7,6 +7,7 @@ import {
   ArrowUpRight,
   BarChart3,
   CalendarDays,
+  Clock3,
   CheckCircle2,
   ChevronRight,
   CircleUserRound,
@@ -46,10 +47,11 @@ import Brand from '../components/Brand';
 import LocationMap from '../components/LocationMap';
 import ReportFilters from '../components/ReportFilters';
 import StaffManagement from './StaffManagement';
+import SyncSettings from './SyncSettings';
 import {
   api, clearToken, downloadSummary, downloadSourceCsv, downloadSelectedCsv,
   emptyFilters, filterQuery, hasFilters, hasPermission,
-  type Account, type Overview, type Pair, type UserRow, type FilterValues,
+  type Account, type Overview, type Pair, type UserRow, type FilterValues, type SyncStatus,
 } from '../lib/api';
 
 const colors = ['#c53779', '#ea85ac', '#f3afc8', '#f9d5e3', '#8c5b75', '#d56897'];
@@ -64,7 +66,7 @@ const formatMonth = (month: string) => {
   return date.toLocaleDateString('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' });
 };
 
-type Page = 'overview' | 'reach' | 'users' | 'access';
+type Page = 'overview' | 'reach' | 'users' | 'access' | 'sync';
 
 function ChartCard({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
   return (
@@ -487,6 +489,7 @@ export default function Dashboard({ account, onLogout }: { account: Account; onL
   const [loading, setLoading] = useState(true);
   const [loadingRows, setLoadingRows] = useState(false);
   const [page, setPage] = useState<Page>('overview');
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [filters, setFilters] = useState<FilterValues>(emptyFilters);
   const query = useMemo(() => filterQuery(filters), [filters]);
   const loadRequest = useRef(0);
@@ -494,10 +497,9 @@ export default function Dashboard({ account, onLogout }: { account: Account; onL
   const [menu, setMenu] = useState(false);
   const navigate = useNavigate();
 
-  const load = useCallback(async (force = false) => {
+  const load = useCallback(async (force = false, quiet = false) => {
     const id = ++loadRequest.current;
-    setLoading(true);
-    setError('');
+    if (!quiet) { setLoading(true); setError(''); }
     try {
       const path = 'metrics/overview/' + (query || force ? `?${query}${query && force ? '&' : ''}${force ? 'refresh=1' : ''}` : '');
       const response = await api<Overview>(path);
@@ -508,7 +510,7 @@ export default function Dashboard({ account, onLogout }: { account: Account; onL
     } catch (reason) {
       if (id === loadRequest.current) setError((reason as Error).message || 'Unable to connect to the metrics service.');
     } finally {
-      if (id === loadRequest.current) setLoading(false);
+      if (id === loadRequest.current && !quiet) setLoading(false);
     }
   }, [query]);
 
@@ -530,6 +532,29 @@ export default function Dashboard({ account, onLogout }: { account: Account; onL
   }, [query]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    let active = true;
+    async function checkStatus() {
+      try {
+        const result = await api<SyncStatus>('metrics/sync/status/');
+        if (active) setSyncStatus(result);
+      } catch { /* Keep reporting usable if scheduler status is briefly unavailable. */ }
+    }
+    void checkStatus();
+    const timer = window.setInterval(() => { if (!document.hidden) void checkStatus(); }, 30000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
+  // The cron job writes to the database, not this browser. Poll saved reports
+  // periodically so the screen reflects completed background syncs.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!document.hidden && (page === 'overview' || page === 'reach' || page === 'users')) {
+        void load(false, true);
+        if (page === 'users' && hasPermission(account, 'records.view')) void loadUsers();
+      }
+    }, 60000);
+    return () => window.clearInterval(timer);
+  }, [account, load, loadUsers, page]);
   useEffect(() => {
     if (page === 'users' && hasPermission(account, 'records.view')) void loadUsers();
   }, [page, account, loadUsers]);
@@ -559,7 +584,7 @@ export default function Dashboard({ account, onLogout }: { account: Account; onL
     };
   }, [menu]);
 
-  const pageLabel = page === 'overview' ? 'Overview' : page === 'reach' ? 'Engagement & reach' : page === 'users' ? 'User records' : 'Staff & permissions';
+  const pageLabel = page === 'overview' ? 'Overview' : page === 'reach' ? 'Engagement & reach' : page === 'users' ? 'User records' : page === 'sync' ? 'Data collection' : 'Staff & permissions';
 
   function goToPage(next: Page) {
     setPage(next);
@@ -614,6 +639,11 @@ export default function Dashboard({ account, onLogout }: { account: Account; onL
                 <Users size={18} /> User records
               </button>
             )}
+            {hasPermission(account, 'sync.manage') && (
+              <button className={`nav-item ${page === 'sync' ? 'selected' : ''}`} aria-current={page === 'sync' ? 'page' : undefined} onClick={() => goToPage('sync')}>
+                <Clock3 size={18} /> Data collection
+              </button>
+            )}
             {hasPermission(account, 'staff.manage') && (
               <button className={`nav-item ${page === 'access' ? 'selected' : ''}`} aria-current={page === 'access' ? 'page' : undefined} onClick={() => goToPage('access')}>
                 <UserCog size={18} /> Staff &amp; permissions
@@ -651,9 +681,9 @@ export default function Dashboard({ account, onLogout }: { account: Account; onL
             <div className="breadcrumb"><span>My Period Kit</span><ChevronRight size={14} /><strong>{pageLabel}</strong></div>
           </div>
           <div className="topbar-end">
-            {page !== 'access' && <span className={`connection-pill ${error ? 'is-offline' : data ? 'is-online' : ''}`}>
+            {page !== 'access' && page !== 'sync' && <span className={`connection-pill ${error ? 'is-offline' : data ? 'is-online' : ''}`}>
               {error ? <AlertCircle size={14} /> : data ? <CheckCircle2 size={14} /> : <LoaderCircle size={14} className="spin" />}
-              <span>{error ? 'Source unavailable' : data ? 'Data loaded' : 'Connecting'}</span>
+              <span>{error ? 'Source unavailable' : data ? (syncStatus?.last_error ? 'Saved data' : 'Data loaded') : 'Connecting'}</span>
             </span>}
             <span className="top-user"><ShieldCheck size={16} /> {account.role} access</span>
           </div>
@@ -678,27 +708,27 @@ export default function Dashboard({ account, onLogout }: { account: Account; onL
                   <ArrowDownToLine size={16} /> <span>Full source CSV</span>
                 </button>
               </>}
-              {page !== 'access' && <button className="btn btn-primary" onClick={refresh} disabled={loading || loadingRows}>
+              {page !== 'access' && page !== 'sync' && <button className="btn btn-primary" onClick={refresh} disabled={loading || loadingRows}>
                 <RefreshCw size={16} className={loading ? 'spin' : ''} /> <span>Refresh</span>
               </button>}
             </div>
           </div>
 
-          {page !== 'access' && <ReportFilters applied={filters} options={data?.filters?.options}
+          {page !== 'access' && page !== 'sync' && <ReportFilters applied={filters} options={data?.filters?.options}
             onApply={applyFilters} loading={loading || loadingRows} />}
-          {page !== 'access' && <div className="data-meta" aria-live="polite">
+          {page !== 'access' && page !== 'sync' && <div className="data-meta" aria-live="polite">
             <CalendarDays size={15} />
             {data
               ? <span>Last loaded {new Date(data.updated_at).toLocaleString('en-GB')}
                   <span className="data-meta-detail"> · {data.filters?.active
                     ? `${formatNumber(data.filters?.matched_records)} of ${formatNumber(data.filters?.total_source_records)} supplied records. Filtered counts are record-based.`
-                    : 'Full source summary'} · Cached for up to 5 minutes</span>
+                    : 'Full source summary'} · Saved on server</span>
                 </span>
               : <span>{loading ? 'Connecting to programme metrics...' : 'Awaiting live programme data'}</span>}
           </div>}
 
           {exportError && <div className="inline-error" role="alert"><AlertCircle size={17} /> {exportError}</div>}
-          {page !== 'access' && error && <SourceNotice error={error} hasExistingData={!!data} onRetry={() => void load()} loading={loading} />}
+          {page !== 'access' && page !== 'sync' && error && <SourceNotice error={error} hasExistingData={!!data} onRetry={() => void load()} loading={loading} />}
           {page === 'overview' && <OverviewContent data={data} />}
           {page === 'reach' && <EngagementReachContent data={data} />}
           {page === 'users' && hasPermission(account, 'records.view') && (
@@ -706,6 +736,7 @@ export default function Dashboard({ account, onLogout }: { account: Account; onL
           )}
 
           {page === 'access' && hasPermission(account, 'staff.manage') && <StaffManagement account={account} />}
+          {page === 'sync' && hasPermission(account, 'sync.manage') && <SyncSettings onSynced={() => { void load(); }} />}
 
           <footer className="dash-footer">
             <span>My Period Kit Insights / Internal reporting portal</span>

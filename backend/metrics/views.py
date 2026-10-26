@@ -11,6 +11,8 @@ from accounts.roles import can
 from accounts.models import AccessAuditEvent
 from .filters import enrich_user, parse_filters, select_users
 from .service import UpstreamError, get_source, get_source_csv, safe_csv_cell, summarize
+from .models import MetricsSnapshot
+from .sync import configure, due_sync, public_status
 
 
 class OverviewView(APIView):
@@ -21,9 +23,13 @@ class OverviewView(APIView):
         filters = parse_filters(request.query_params)
         force = request.query_params.get('refresh') == '1'
         if force and not can(request.user, 'metrics.refresh'):
-            return Response({'detail': 'Administrator permission required to bypass the metrics cache.'}, status=403)
+            return Response({'detail': 'Administrator permission required to refresh the metrics source.'}, status=403)
         try:
             data = summarize(get_source(force=force), filters)
+            snapshot = MetricsSnapshot.objects.filter(pk=1).first()
+            if snapshot is not None:
+                data['updated_at'] = snapshot.fetched_at.isoformat()
+                data['source'] = 'saved_snapshot'
         except (UpstreamError, ImproperlyConfigured) as exc:
             return Response({'detail': str(exc)}, status=503)
         return Response(data)
@@ -156,3 +162,55 @@ class FilteredRecordsCsvView(APIView):
             ]},
         )
         return response
+
+
+class SyncStatusView(APIView):
+    """Read-only scheduler health, not participant records or credentials."""
+    permission_classes = [RequiresCapability]
+    required_capability = 'overview.view'
+
+    def get(self, request):
+        # Only administrators can review individual sync attempts and errors.
+        return Response(public_status(include_history=can(request.user, 'sync.manage')))
+
+
+class SyncSettingsView(APIView):
+    """Admin-only interval configuration, persisted in the Django database."""
+    permission_classes = [RequiresCapability]
+    required_capability = 'sync.manage'
+
+    def get(self, request):
+        return Response(public_status())
+
+    def patch(self, request):
+        # Strict validation: no strings, booleans as minutes, or floating values.
+        from .sync import schedule
+        current = schedule()
+        interval = request.data.get('interval_minutes', current.interval_minutes)
+        enabled = request.data.get('enabled', current.enabled)
+        try:
+            configure(interval_minutes=interval, enabled=enabled, user=request.user)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=400)
+        AccessAuditEvent.objects.create(actor=request.user, target=None,
+                                        action='metrics.sync_settings_changed',
+                                        details={'interval_minutes': interval, 'enabled': enabled})
+        return Response(public_status())
+
+
+class SyncRunNowView(APIView):
+    """Administrator-triggered immediate pull, sharing the cron concurrency lock."""
+    permission_classes = [RequiresCapability]
+    required_capability = 'sync.manage'
+
+    def post(self, request):
+        result = due_sync(trigger='manual', force=True)
+        if result['outcome'] == 'skipped':
+            return Response({'detail': 'A metrics pull is already running.', 'sync': public_status()}, status=409)
+        AccessAuditEvent.objects.create(actor=request.user, target=None,
+                                        action='metrics.sync_manual_requested',
+                                        details={'outcome': result['outcome']})
+        if result['outcome'] == 'failed':
+            return Response({'detail': 'Metrics pull failed. Previous data has been retained.',
+                             'sync': public_status()}, status=503)
+        return Response({'detail': 'Metrics updated successfully.', 'sync': public_status()})

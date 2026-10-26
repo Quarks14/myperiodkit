@@ -12,7 +12,8 @@ CAPABILITY_LABELS = {
     'records.view': 'View identifiable source user records',
     'export.summary': 'Download aggregate CSV reports',
     'export.records': 'Download identifiable participant records as CSV',
-    'metrics.refresh': 'Refresh the upstream metrics cache',
+    'metrics.refresh': 'Refresh the upstream metrics snapshot',
+    'sync.manage': 'Configure and run scheduled metrics collection',
     'staff.manage': 'Create, update and disable staff accounts',
     'audit.view': 'Review staff access changes',
 }

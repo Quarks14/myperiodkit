@@ -11,12 +11,10 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 import requests
-from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured
 from requests.auth import HTTPBasicAuth
 from .filters import CohortFilters, filter_options, select_users, safe_date, user_country_state
 
-CACHE_KEY = 'periodkit:source:v1'
 MAX_CSV_BYTES = 10 * 1024 * 1024
 
 
@@ -57,11 +55,8 @@ def source_settings():
     return url, HTTPBasicAuth(username, password), timeout
 
 
-def get_source(force=False):
-    if not force:
-        saved = cache.get(CACHE_KEY)
-        if saved is not None:
-            return saved
+def fetch_source():
+    """Fetch and validate the upstream JSON without exposing authentication data."""
     url, auth, timeout = source_settings()
     try:
         response = requests.get(url, auth=auth, headers={'Accept': 'application/json'}, timeout=timeout)
@@ -73,10 +68,32 @@ def get_source(force=False):
         not isinstance(payload, dict)
         or not isinstance(payload.get('summary'), dict)
         or not isinstance(payload.get('users'), list)
+        or any(not isinstance(item, dict) for item in payload['users'])
     ):
         raise UpstreamError('Metrics source returned an unexpected response')
-    cache.set(CACHE_KEY, payload, max(30, int(os.getenv('METRICS_CACHE_SECONDS', '300'))))
     return payload
+
+
+def get_source(force=False):
+    """Read the last successful database snapshot shared with the cron process.
+
+    Only a manual refresh, a scheduled job, or first-use bootstrap makes an
+    upstream request. On sync failure the previous snapshot remains available.
+    """
+    from .models import MetricsSnapshot
+    from .sync import due_sync
+    result = None
+    if force:
+        result = due_sync(trigger='manual', force=True)
+    saved = MetricsSnapshot.objects.filter(pk=1).first()
+    if saved is None and not force:
+        result = due_sync(trigger='bootstrap', force=True)
+        saved = MetricsSnapshot.objects.filter(pk=1).first()
+    if saved is not None:
+        return saved.payload
+    if result and result.get('outcome') == 'skipped':
+        raise UpstreamError('Metrics sync is already running. Try again shortly.')
+    raise UpstreamError('Metrics source is unavailable and no saved snapshot is available.')
 
 
 def safe_csv_cell(value):
